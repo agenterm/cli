@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agenterm/cli/internal/agent"
 	"github.com/agenterm/cli/internal/config"
 	"github.com/agenterm/cli/internal/gate"
 	"github.com/agenterm/cli/internal/hook"
@@ -102,7 +103,7 @@ func runInit(args []string) int {
 	}
 
 	fmt.Fprint(os.Stderr, "Validating push key... ")
-	if err := cfg.Validate(); err != nil {
+	if err := relay.ValidatePushKey(cfg.RelayURL, cfg.PushKey); err != nil {
 		fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
 		return 1
 	}
@@ -243,36 +244,24 @@ func runHookInstall(target string) int {
 		return 1
 	}
 
-	type hookTarget struct {
-		name         string
-		install      func(string, string) error
-		settingsPath func() (string, error)
-		hookName     string
-	}
-
-	targets := []hookTarget{
-		{"claude", hook.Install, hook.SettingsPath, "PermissionRequest"},
-		{"gemini", hook.InstallGemini, hook.GeminiSettingsPath, "BeforeTool"},
-	}
-
 	matched := false
 	exitCode := 0
-	for _, t := range targets {
-		if target != "all" && target != t.name {
+	for _, t := range agent.Targets() {
+		if target != "all" && target != t.Name {
 			continue
 		}
 		matched = true
-		if err := t.install(binaryPath, ""); err != nil {
+		if err := t.Install(binaryPath, ""); err != nil {
 			if errors.Is(err, hook.ErrAlreadyInstalled) {
-				fmt.Fprintf(os.Stderr, "[%s] hook already installed\n", t.name)
+				fmt.Fprintf(os.Stderr, "[%s] hook already installed\n", t.Name)
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "[%s] error: %v\n", t.name, err)
+			fmt.Fprintf(os.Stderr, "[%s] error: %v\n", t.Name, err)
 			exitCode = 1
 			continue
 		}
-		settingsPath, _ := t.settingsPath()
-		fmt.Fprintf(os.Stderr, "[%s] Installed %s hook in %s\n", t.name, t.hookName, settingsPath)
+		settingsPath, _ := t.SettingsPath()
+		fmt.Fprintf(os.Stderr, "[%s] Installed %s hook in %s\n", t.Name, t.HookName, settingsPath)
 	}
 
 	if !matched {
@@ -283,35 +272,24 @@ func runHookInstall(target string) int {
 }
 
 func runHookUninstall(target string) int {
-	type hookTarget struct {
-		name         string
-		uninstall    func(string) error
-		settingsPath func() (string, error)
-	}
-
-	targets := []hookTarget{
-		{"claude", hook.Uninstall, hook.SettingsPath},
-		{"gemini", hook.UninstallGemini, hook.GeminiSettingsPath},
-	}
-
 	matched := false
 	exitCode := 0
-	for _, t := range targets {
-		if target != "all" && target != t.name {
+	for _, t := range agent.Targets() {
+		if target != "all" && target != t.Name {
 			continue
 		}
 		matched = true
-		if err := t.uninstall(""); err != nil {
+		if err := t.Uninstall(""); err != nil {
 			if errors.Is(err, hook.ErrNotInstalled) {
-				fmt.Fprintf(os.Stderr, "[%s] hook not found\n", t.name)
+				fmt.Fprintf(os.Stderr, "[%s] hook not found\n", t.Name)
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "[%s] error: %v\n", t.name, err)
+			fmt.Fprintf(os.Stderr, "[%s] error: %v\n", t.Name, err)
 			exitCode = 1
 			continue
 		}
-		settingsPath, _ := t.settingsPath()
-		fmt.Fprintf(os.Stderr, "[%s] Uninstalled hook from %s\n", t.name, settingsPath)
+		settingsPath, _ := t.SettingsPath()
+		fmt.Fprintf(os.Stderr, "[%s] Uninstalled hook from %s\n", t.Name, settingsPath)
 	}
 
 	if !matched {
@@ -355,66 +333,26 @@ func runGate(args []string) int {
 	return runGateLegacy(input, *timeout)
 }
 
-// runGateHook handles Claude Code hook protocol (PreToolUse and PermissionRequest).
-// Reads hook JSON, checks rules, sends approval proposal if needed,
-// and outputs hook-compatible JSON. Always exits 0 (decision in JSON) or 2 (hard error).
+// runGateHook dispatches hook input to the appropriate handler based on event type.
 func runGateHook(hookInput *gate.HookInput, timeout int) int {
-	switch hookInput.HookEventName {
-	case "PermissionRequest":
+	if hookInput.HookEventName == "PermissionRequest" {
 		return runGatePermissionRequest(hookInput, timeout)
-	case "BeforeTool":
-		return runGateBeforeTool(hookInput, timeout)
-	default:
-		return runGatePreToolUse(hookInput, timeout)
 	}
+	return runGateToolCheck(hookInput, timeout, agent.OutputterForEvent(hookInput.HookEventName))
 }
 
-// runGateBeforeTool handles Gemini CLI BeforeTool hooks: check rules, propose if dangerous.
-func runGateBeforeTool(hookInput *gate.HookInput, timeout int) int {
-	return runGateToolCheck(hookInput, timeout, geminiOutputter{})
-}
-
-// runGatePreToolUse handles PreToolUse hooks: check rules, propose if dangerous.
-func runGatePreToolUse(hookInput *gate.HookInput, timeout int) int {
-	return runGateToolCheck(hookInput, timeout, claudeOutputter{})
-}
-
-// gateOutputter abstracts the output format for different hook protocols.
-type gateOutputter interface {
-	allow(reason string)
-	deny(reason string)
-}
-
-type geminiOutputter struct{}
-
-func (geminiOutputter) allow(_ string) {
-	outputJSON(&gate.GeminiHookOutput{Decision: "allow"})
-}
-func (geminiOutputter) deny(reason string) {
-	outputJSON(&gate.GeminiHookOutput{Decision: "deny", Reason: reason})
-}
-
-type claudeOutputter struct{}
-
-func (claudeOutputter) allow(reason string) {
-	outputJSON(gate.BuildHookOutput("allow", reason))
-}
-func (claudeOutputter) deny(reason string) {
-	outputJSON(gate.BuildHookOutput("deny", reason))
-}
-
-// runGateToolCheck is the shared gate logic for both PreToolUse and BeforeTool hooks.
-func runGateToolCheck(hookInput *gate.HookInput, timeout int, out gateOutputter) int {
+// runGateToolCheck is the shared gate logic for rule-matched hooks (PreToolUse, BeforeTool).
+func runGateToolCheck(hookInput *gate.HookInput, timeout int, out agent.Outputter) int {
 	input := gate.ExtractCheckInput(hookInput)
 	if input == "" {
-		out.allow("no input to check")
+		outputJSON(out.Allow("no input to check"))
 		return 0
 	}
 
 	rules := gate.DefaultRules()
 	matched, rule := gate.MatchesAny(input, rules)
 	if !matched {
-		out.allow("no dangerous pattern matched")
+		outputJSON(out.Allow("no dangerous pattern matched"))
 		return 0
 	}
 
@@ -431,9 +369,9 @@ func runGateToolCheck(hookInput *gate.HookInput, timeout int, out gateOutputter)
 	if errors.Is(err, relay.ErrGateDisabled) {
 		fmt.Fprintf(os.Stderr, "gate: takeover not enabled, falling back to local prompt\n")
 		if askLocallyInTerminal(input) {
-			out.allow("approved locally via AgenTerm")
+			outputJSON(out.Allow("approved locally via AgenTerm"))
 		} else {
-			out.deny("denied locally via AgenTerm")
+			outputJSON(out.Deny("denied locally via AgenTerm"))
 		}
 		return 0
 	}
@@ -444,16 +382,15 @@ func runGateToolCheck(hookInput *gate.HookInput, timeout int, out gateOutputter)
 
 	switch result.Decision {
 	case "approved", "allow":
-		out.allow("approved via AgenTerm")
+		outputJSON(out.Allow("approved via AgenTerm"))
 	default:
-		out.deny(fmt.Sprintf("denied via AgenTerm: %s", rule.Description))
+		outputJSON(out.Deny(fmt.Sprintf("denied via AgenTerm: %s", rule.Description)))
 	}
 	return 0
 }
 
 // runGatePermissionRequest handles PermissionRequest hooks.
 // Claude Code has already determined this action needs permission — no rule matching needed.
-// Directly submit a proposal and wait for approval.
 func runGatePermissionRequest(hookInput *gate.HookInput, timeout int) int {
 	cfg, err := config.Load()
 	if err != nil {
@@ -475,32 +412,28 @@ func runGatePermissionRequest(hookInput *gate.HookInput, timeout int) int {
 	}
 
 	client := relay.NewClient(cfg)
-	proposal, err := client.CreateProposal("approval", title, body, relay.WithExpiresIn(timeout))
+	out := agent.ClaudePermissionOutputter{}
+
+	result, err := gate.RunPermissionGate(client, title, body, time.Duration(timeout)*time.Second)
 	if errors.Is(err, relay.ErrGateDisabled) {
 		fmt.Fprintf(os.Stderr, "gate: takeover not enabled, falling back to local prompt\n")
 		if askLocallyInTerminal(fmt.Sprintf("Tool: %s\nInput: %s", title, body)) {
-			outputJSON(gate.BuildPermissionRequestOutput("allow", "approved locally via AgenTerm"))
+			outputJSON(out.Allow("approved locally via AgenTerm"))
 		} else {
-			outputJSON(gate.BuildPermissionRequestOutput("deny", "denied locally via AgenTerm"))
+			outputJSON(out.Deny("denied locally via AgenTerm"))
 		}
 		return 0
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gate: error creating proposal: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gate: error: %v\n", err)
 		return 2
 	}
 
-	proposal, err = client.WaitForProposal(proposal.ID, time.Duration(timeout)*time.Second)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "gate: error waiting for approval: %v\n", err)
-		return 2
-	}
-
-	switch proposal.Status {
-	case "approved", "remembered":
-		outputJSON(gate.BuildPermissionRequestOutput("allow", "approved via AgenTerm"))
+	switch result.Decision {
+	case "approved", "allow":
+		outputJSON(out.Allow("approved via AgenTerm"))
 	default:
-		outputJSON(gate.BuildPermissionRequestOutput("deny", "denied via AgenTerm"))
+		outputJSON(out.Deny("denied via AgenTerm"))
 	}
 	return 0
 }

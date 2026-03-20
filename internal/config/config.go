@@ -2,11 +2,8 @@ package config
 
 import (
 	"encoding/json"
-	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 const DefaultRelayURL = "https://push.agenterm.app"
@@ -80,28 +77,4 @@ func (c *Config) Save() error {
 		return err
 	}
 	return os.WriteFile(p, data, 0o600)
-}
-
-// Validate checks that the push key is accepted by the relay.
-// It sends a test POST /proposals request and treats HTTP 401 as invalid.
-func (c *Config) Validate() error {
-	url := strings.TrimRight(c.RelayURL, "/") + "/proposals"
-	body := `{"type":"status","title":"__validate__"}`
-	req, err := http.NewRequest("POST", url, strings.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.PushKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := (&http.Client{}).Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to relay: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("invalid push key (HTTP 401)")
-	}
-	return nil
 }

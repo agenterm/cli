@@ -17,7 +17,15 @@
       "Bash(./bin/agenterm hook:*)",
       "Bash(./bin/agenterm version:*)",
       "Bash(./bin/agenterm --version)",
-      "Bash(./bin/agenterm -v)"
+      "Bash(./bin/agenterm -v)",
+      "Bash(find /Users/junyi/claude/agenterm/cli -type f \\\\\\(-name *.mk -o -name *helper* -o -name *util* \\\\\\))",
+      "Bash(grep -r \"curl\\\\|wget\\\\|download\\\\|checksum\\\\|sha256\\\\|verify\\\\|install\" /Users/junyi/claude/agenterm/cli --include=*.go)",
+      "Bash(ls Makefile* go.* *test*)",
+      "Bash(/opt/homebrew/bin/go test:*)",
+      "Bash(wc -l /Users/junyi/claude/agenterm/cli/**/*.go /Users/junyi/claude/agenterm/cli/*.go)",
+      "Bash(find /Users/junyi/claude/agenterm/cli -name *.go -exec wc -l {} +)",
+      "Bash(wc:*)",
+      "Bash(go vet:*)"
     ]
   }
 }
