@@ -1,5 +1,14 @@
 package agent
 
+import "github.com/agenterm/cli/internal/hook"
+
+func init() {
+	Register(
+		HookTarget{Name: "claude", HookName: "PermissionRequest", Config: hook.ClaudeHookConfig},
+		ClaudePermissionOutputter{},
+	)
+}
+
 // ClaudePreToolUseOutputter formats decisions for Claude Code PreToolUse hooks.
 type ClaudePreToolUseOutputter struct{}
 

@@ -30,23 +30,28 @@ func (t HookTarget) SettingsPath() (string, error) {
 	return t.Config.DefaultSettingsPath()
 }
 
-// Targets returns all supported agent hook targets.
+var (
+	registeredTargets    []HookTarget
+	registeredOutputters = map[string]Outputter{}
+)
+
+// Register adds an agent target and its event outputter to the registry.
+// Each agent should call this from init() to self-register.
+func Register(t HookTarget, out Outputter) {
+	registeredTargets = append(registeredTargets, t)
+	registeredOutputters[t.HookName] = out
+}
+
+// Targets returns all registered agent hook targets.
 func Targets() []HookTarget {
-	return []HookTarget{
-		{Name: "claude", HookName: "PermissionRequest", Config: hook.ClaudeHookConfig},
-		{Name: "gemini", HookName: "BeforeTool", Config: hook.GeminiHookConfig},
-	}
+	return registeredTargets
 }
 
 // OutputterForEvent returns the appropriate Outputter for a given hook event name.
 // Defaults to Claude PreToolUse format for unknown events.
 func OutputterForEvent(eventName string) Outputter {
-	if o, ok := outputters[eventName]; ok {
+	if o, ok := registeredOutputters[eventName]; ok {
 		return o
 	}
 	return ClaudePreToolUseOutputter{}
-}
-
-var outputters = map[string]Outputter{
-	"BeforeTool": GeminiOutputter{},
 }

@@ -1,5 +1,14 @@
 package agent
 
+import "github.com/agenterm/cli/internal/hook"
+
+func init() {
+	Register(
+		HookTarget{Name: "gemini", HookName: "BeforeTool", Config: hook.GeminiHookConfig},
+		GeminiOutputter{},
+	)
+}
+
 // GeminiOutputter formats decisions for Gemini CLI BeforeTool hooks.
 type GeminiOutputter struct{}
 

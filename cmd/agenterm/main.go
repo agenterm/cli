@@ -400,7 +400,7 @@ func runGatePermissionRequest(hookInput *agent.HookInput, timeout int) int {
 	}
 
 	client := relay.NewClient(cfg)
-	out := agent.ClaudePermissionOutputter{}
+	out := agent.OutputterForEvent(hookInput.HookEventName)
 
 	result, err := gate.RunPermissionGate(client, title, body, time.Duration(timeout)*time.Second)
 	fallbackPrompt := fmt.Sprintf("Tool: %s\nInput: %s", title, body)
