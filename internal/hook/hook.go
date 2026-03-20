@@ -18,28 +18,32 @@ var (
 
 const hookMarker = "agenterm gate"
 
-// GeminiSettingsPath returns the default path to Gemini CLI's settings.json.
-func GeminiSettingsPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("getting home directory: %w", err)
-	}
-	return filepath.Join(home, ".gemini", "settings.json"), nil
+// HookConfig describes how to install/uninstall a hook for a specific agent.
+type HookConfig struct {
+	DefaultSettingsPath func() (string, error)
+	EventName           string   // primary hook event (e.g., "PermissionRequest")
+	LegacyEvents        []string // additional events to clean up on install/uninstall
+	Matcher             string   // hook matcher pattern
+	Timeout             int      // hook timeout value
+	HookName            string   // optional name field in hook entry
 }
 
-// buildGeminiHookEntry creates a BeforeTool hook entry for Gemini CLI.
-func buildGeminiHookEntry(binaryPath string) map[string]interface{} {
-	return map[string]interface{}{
-		"matcher": "*",
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"name":    "agenterm-gate",
-				"type":    "command",
-				"command": binaryPath + " gate",
-				"timeout": 120000, // Gemini timeout is in ms
-			},
-		},
-	}
+// ClaudeHookConfig is the hook configuration for Claude Code.
+var ClaudeHookConfig = HookConfig{
+	DefaultSettingsPath: SettingsPath,
+	EventName:           "PermissionRequest",
+	LegacyEvents:        []string{"PreToolUse"},
+	Matcher:             "",
+	Timeout:             120,
+}
+
+// GeminiHookConfig is the hook configuration for Gemini CLI.
+var GeminiHookConfig = HookConfig{
+	DefaultSettingsPath: GeminiSettingsPath,
+	EventName:           "BeforeTool",
+	Matcher:             "*",
+	Timeout:             120000,
+	HookName:            "agenterm-gate",
 }
 
 // SettingsPath returns the default path to Claude Code's settings.json.
@@ -49,6 +53,113 @@ func SettingsPath() (string, error) {
 		return "", fmt.Errorf("getting home directory: %w", err)
 	}
 	return filepath.Join(home, ".claude", "settings.json"), nil
+}
+
+// GeminiSettingsPath returns the default path to Gemini CLI's settings.json.
+func GeminiSettingsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("getting home directory: %w", err)
+	}
+	return filepath.Join(home, ".gemini", "settings.json"), nil
+}
+
+// InstallHook adds the agenterm gate hook to an agent's settings file.
+// binaryPath is the absolute path to the agenterm binary.
+// settingsPath can be empty to use the config's default path.
+func InstallHook(binaryPath, settingsPath string, cfg HookConfig) error {
+	if settingsPath == "" {
+		var err error
+		settingsPath, err = cfg.DefaultSettingsPath()
+		if err != nil {
+			return err
+		}
+	}
+
+	settings, err := readSettings(settingsPath)
+	if err != nil {
+		return err
+	}
+
+	hooks := getHooksMap(settings)
+
+	// Check if already installed.
+	entries := getHookEntries(hooks, cfg.EventName)
+	if containsMarker(entries) {
+		return ErrAlreadyInstalled
+	}
+
+	// Clean up legacy events.
+	for _, legacy := range cfg.LegacyEvents {
+		legacyEntries := getHookEntries(hooks, legacy)
+		if len(legacyEntries) > 0 {
+			filtered, removed := removeMarkerEntries(legacyEntries)
+			if removed > 0 {
+				if len(filtered) == 0 {
+					delete(hooks, legacy)
+				} else {
+					hooks[legacy] = filtered
+				}
+			}
+		}
+	}
+
+	// Add hook entry.
+	entry := buildEntry(binaryPath, cfg)
+	entries = append(entries, entry)
+	hooks[cfg.EventName] = entries
+
+	return writeSettings(settingsPath, settings)
+}
+
+// UninstallHook removes all agenterm gate hooks for the given configuration.
+// settingsPath can be empty to use the config's default path.
+func UninstallHook(settingsPath string, cfg HookConfig) error {
+	if settingsPath == "" {
+		var err error
+		settingsPath, err = cfg.DefaultSettingsPath()
+		if err != nil {
+			return err
+		}
+	}
+	eventNames := append([]string{cfg.EventName}, cfg.LegacyEvents...)
+	return uninstallFromSettings(settingsPath, eventNames...)
+}
+
+// Install adds the agenterm gate hook to Claude Code settings.
+func Install(binaryPath, settingsPath string) error {
+	return InstallHook(binaryPath, settingsPath, ClaudeHookConfig)
+}
+
+// Uninstall removes all agenterm gate hooks from Claude Code settings.
+func Uninstall(settingsPath string) error {
+	return UninstallHook(settingsPath, ClaudeHookConfig)
+}
+
+// InstallGemini adds the agenterm gate hook to Gemini CLI settings.
+func InstallGemini(binaryPath, settingsPath string) error {
+	return InstallHook(binaryPath, settingsPath, GeminiHookConfig)
+}
+
+// UninstallGemini removes all agenterm gate hooks from Gemini CLI settings.
+func UninstallGemini(settingsPath string) error {
+	return UninstallHook(settingsPath, GeminiHookConfig)
+}
+
+// buildEntry creates a hook entry from the given configuration.
+func buildEntry(binaryPath string, cfg HookConfig) map[string]interface{} {
+	hookEntry := map[string]interface{}{
+		"type":    "command",
+		"command": binaryPath + " gate",
+		"timeout": cfg.Timeout,
+	}
+	if cfg.HookName != "" {
+		hookEntry["name"] = cfg.HookName
+	}
+	return map[string]interface{}{
+		"matcher": cfg.Matcher,
+		"hooks":   []interface{}{hookEntry},
+	}
 }
 
 // readSettings reads and parses settings.json at the given path.
@@ -132,126 +243,6 @@ func removeMarkerEntries(entries []interface{}) ([]interface{}, int) {
 		}
 	}
 	return result, removed
-}
-
-// buildHookEntry creates a PermissionRequest hook entry for the given binary path.
-func buildHookEntry(binaryPath string) map[string]interface{} {
-	return map[string]interface{}{
-		"matcher": "",
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": binaryPath + " gate",
-				"timeout": 120,
-			},
-		},
-	}
-}
-
-// Install adds the agenterm gate hook to Claude Code settings.
-// It installs a PermissionRequest hook and removes any legacy PreToolUse hooks.
-// binaryPath is the absolute path to the agenterm binary.
-// settingsPath can be empty to use the default path.
-func Install(binaryPath, settingsPath string) error {
-	if settingsPath == "" {
-		var err error
-		settingsPath, err = SettingsPath()
-		if err != nil {
-			return err
-		}
-	}
-
-	settings, err := readSettings(settingsPath)
-	if err != nil {
-		return err
-	}
-
-	hooks := getHooksMap(settings)
-
-	// Check if already installed in PermissionRequest.
-	prEntries := getHookEntries(hooks, "PermissionRequest")
-	if containsMarker(prEntries) {
-		return ErrAlreadyInstalled
-	}
-
-	// Clean up legacy PreToolUse hook if present.
-	ptuEntries := getHookEntries(hooks, "PreToolUse")
-	if len(ptuEntries) > 0 {
-		filtered, removed := removeMarkerEntries(ptuEntries)
-		if removed > 0 {
-			if len(filtered) == 0 {
-				delete(hooks, "PreToolUse")
-			} else {
-				hooks["PreToolUse"] = filtered
-			}
-		}
-	}
-
-	// Add PermissionRequest hook entry.
-	entry := buildHookEntry(binaryPath)
-	prEntries = append(prEntries, entry)
-	hooks["PermissionRequest"] = prEntries
-
-	return writeSettings(settingsPath, settings)
-}
-
-// Uninstall removes all agenterm gate hooks from Claude Code settings.
-// settingsPath can be empty to use the default path.
-func Uninstall(settingsPath string) error {
-	if settingsPath == "" {
-		var err error
-		settingsPath, err = SettingsPath()
-		if err != nil {
-			return err
-		}
-	}
-	return uninstallFromSettings(settingsPath, "PermissionRequest", "PreToolUse")
-}
-
-// InstallGemini adds the agenterm gate hook to Gemini CLI settings.
-// binaryPath is the absolute path to the agenterm binary.
-// settingsPath can be empty to use the default path.
-func InstallGemini(binaryPath, settingsPath string) error {
-	if settingsPath == "" {
-		var err error
-		settingsPath, err = GeminiSettingsPath()
-		if err != nil {
-			return err
-		}
-	}
-
-	settings, err := readSettings(settingsPath)
-	if err != nil {
-		return err
-	}
-
-	hooks := getHooksMap(settings)
-
-	// Check if already installed in BeforeTool.
-	btEntries := getHookEntries(hooks, "BeforeTool")
-	if containsMarker(btEntries) {
-		return ErrAlreadyInstalled
-	}
-
-	// Add BeforeTool hook entry.
-	entry := buildGeminiHookEntry(binaryPath)
-	btEntries = append(btEntries, entry)
-	hooks["BeforeTool"] = btEntries
-
-	return writeSettings(settingsPath, settings)
-}
-
-// UninstallGemini removes all agenterm gate hooks from Gemini CLI settings.
-// settingsPath can be empty to use the default path.
-func UninstallGemini(settingsPath string) error {
-	if settingsPath == "" {
-		var err error
-		settingsPath, err = GeminiSettingsPath()
-		if err != nil {
-			return err
-		}
-	}
-	return uninstallFromSettings(settingsPath, "BeforeTool")
 }
 
 // uninstallFromSettings removes agenterm gate hooks for the given event names.

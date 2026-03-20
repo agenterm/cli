@@ -10,18 +10,31 @@ type Outputter interface {
 
 // HookTarget defines install/uninstall operations for a supported agent.
 type HookTarget struct {
-	Name         string
-	HookName     string
-	Install      func(binaryPath, settingsPath string) error
-	Uninstall    func(settingsPath string) error
-	SettingsPath func() (string, error)
+	Name     string
+	HookName string
+	Config   hook.HookConfig
+}
+
+// Install adds the agenterm gate hook to the agent's settings.
+func (t HookTarget) Install(binaryPath, settingsPath string) error {
+	return hook.InstallHook(binaryPath, settingsPath, t.Config)
+}
+
+// Uninstall removes the agenterm gate hook from the agent's settings.
+func (t HookTarget) Uninstall(settingsPath string) error {
+	return hook.UninstallHook(settingsPath, t.Config)
+}
+
+// SettingsPath returns the default path to the agent's settings file.
+func (t HookTarget) SettingsPath() (string, error) {
+	return t.Config.DefaultSettingsPath()
 }
 
 // Targets returns all supported agent hook targets.
 func Targets() []HookTarget {
 	return []HookTarget{
-		{Name: "claude", HookName: "PermissionRequest", Install: hook.Install, Uninstall: hook.Uninstall, SettingsPath: hook.SettingsPath},
-		{Name: "gemini", HookName: "BeforeTool", Install: hook.InstallGemini, Uninstall: hook.UninstallGemini, SettingsPath: hook.GeminiSettingsPath},
+		{Name: "claude", HookName: "PermissionRequest", Config: hook.ClaudeHookConfig},
+		{Name: "gemini", HookName: "BeforeTool", Config: hook.GeminiHookConfig},
 	}
 }
 

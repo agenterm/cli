@@ -103,7 +103,8 @@ func runInit(args []string) int {
 	}
 
 	fmt.Fprint(os.Stderr, "Validating push key... ")
-	if err := relay.ValidatePushKey(cfg.RelayURL, cfg.PushKey); err != nil {
+	client := relay.NewClient(cfg)
+	if err := client.Ping(); err != nil {
 		fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
 		return 1
 	}
@@ -320,7 +321,7 @@ func runGate(args []string) int {
 		return 2
 	}
 
-	if hookInput := gate.ParseHookInput(data); hookInput != nil {
+	if hookInput := agent.ParseHookInput(data); hookInput != nil {
 		return runGateHook(hookInput, *timeout)
 	}
 
@@ -334,7 +335,7 @@ func runGate(args []string) int {
 }
 
 // runGateHook dispatches hook input to the appropriate handler based on event type.
-func runGateHook(hookInput *gate.HookInput, timeout int) int {
+func runGateHook(hookInput *agent.HookInput, timeout int) int {
 	if hookInput.HookEventName == "PermissionRequest" {
 		return runGatePermissionRequest(hookInput, timeout)
 	}
@@ -342,8 +343,8 @@ func runGateHook(hookInput *gate.HookInput, timeout int) int {
 }
 
 // runGateToolCheck is the shared gate logic for rule-matched hooks (PreToolUse, BeforeTool).
-func runGateToolCheck(hookInput *gate.HookInput, timeout int, out agent.Outputter) int {
-	input := gate.ExtractCheckInput(hookInput)
+func runGateToolCheck(hookInput *agent.HookInput, timeout int, out agent.Outputter) int {
+	input := agent.ExtractCheckInput(hookInput)
 	if input == "" {
 		outputJSON(out.Allow("no input to check"))
 		return 0
@@ -391,7 +392,7 @@ func runGateToolCheck(hookInput *gate.HookInput, timeout int, out agent.Outputte
 
 // runGatePermissionRequest handles PermissionRequest hooks.
 // Claude Code has already determined this action needs permission — no rule matching needed.
-func runGatePermissionRequest(hookInput *gate.HookInput, timeout int) int {
+func runGatePermissionRequest(hookInput *agent.HookInput, timeout int) int {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gate: config not found, blocking permission request\n")
