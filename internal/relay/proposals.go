@@ -13,6 +13,9 @@ import (
 // ErrGateDisabled is returned when the gate takeover is not enabled for this user.
 var ErrGateDisabled = errors.New("gate disabled: takeover not enabled")
 
+// ErrRateLimited is returned when the relay server rate-limits the request.
+var ErrRateLimited = errors.New("rate limited by relay server")
+
 // Proposal represents a proposal in the relay system.
 type Proposal struct {
 	ID          string  `json:"id"`
@@ -89,9 +92,12 @@ func (c *Client) CreateProposal(pType, title, body string, opts ...CreateOption)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, ErrRateLimited
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("create proposal: HTTP %d: %s", resp.StatusCode, string(b))
+		return nil, fmt.Errorf("create proposal: HTTP %d: %s", resp.StatusCode, parseErrorBody(b))
 	}
 
 	var proposal Proposal
@@ -117,9 +123,12 @@ func (c *Client) GetProposal(id string) (*Proposal, error) {
 		return &Proposal{ID: id, Status: "pending"}, nil
 	}
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, ErrRateLimited
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("get proposal: HTTP %d: %s", resp.StatusCode, string(b))
+		return nil, fmt.Errorf("get proposal: HTTP %d: %s", resp.StatusCode, parseErrorBody(b))
 	}
 
 	var proposal Proposal
@@ -172,4 +181,16 @@ func (c *Client) WaitForProposal(id string, timeout time.Duration) (*Proposal, e
 		}
 		// Status is still pending — loop and poll again
 	}
+}
+
+// parseErrorBody extracts the error message from a JSON error response body.
+// Falls back to the raw string if parsing fails.
+func parseErrorBody(body []byte) string {
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+		return errResp.Error
+	}
+	return string(body)
 }

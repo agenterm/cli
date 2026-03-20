@@ -29,9 +29,9 @@ func NewClient(cfg *config.Config) *Client {
 }
 
 // Ping validates that the push key is accepted by the relay server.
-// It sends a test POST /proposals request and treats HTTP 401 as invalid.
+// Uses a side-effect-free GET to verify authentication without creating proposals.
 func (c *Client) Ping() error {
-	resp, err := c.doRequest("POST", "/proposals", strings.NewReader(`{"type":"status","title":"__validate__","body":"__validate__"}`))
+	resp, err := c.doRequest("GET", "/proposals/__ping__?timeout=0", nil)
 	if err != nil {
 		return err
 	}
@@ -39,6 +39,7 @@ func (c *Client) Ping() error {
 	if resp.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf("invalid push key (HTTP 401)")
 	}
+	// 404 is expected (proposal doesn't exist) — key is valid.
 	return nil
 }
 

@@ -43,7 +43,7 @@ func readJSON(t *testing.T, path string) map[string]interface{} {
 func TestInstall_Fresh(t *testing.T) {
 	path := tempSettingsPath(t)
 
-	if err := Install("/usr/local/bin/agenterm", path); err != nil {
+	if err := InstallHook("/usr/local/bin/agenterm", path, ClaudeHookConfig); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -72,11 +72,11 @@ func TestInstall_Fresh(t *testing.T) {
 func TestInstall_AlreadyInstalled(t *testing.T) {
 	path := tempSettingsPath(t)
 
-	if err := Install("/usr/local/bin/agenterm", path); err != nil {
+	if err := InstallHook("/usr/local/bin/agenterm", path, ClaudeHookConfig); err != nil {
 		t.Fatalf("first install failed: %v", err)
 	}
 
-	err := Install("/usr/local/bin/agenterm", path)
+	err := InstallHook("/usr/local/bin/agenterm", path, ClaudeHookConfig)
 	if err == nil {
 		t.Fatal("expected error on second install")
 	}
@@ -96,7 +96,7 @@ func TestInstall_PreservesExistingSettings(t *testing.T) {
 		},
 	})
 
-	if err := Install("/usr/local/bin/agenterm", path); err != nil {
+	if err := InstallHook("/usr/local/bin/agenterm", path, ClaudeHookConfig); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -140,7 +140,7 @@ func TestInstall_CleansUpPreToolUse(t *testing.T) {
 		},
 	})
 
-	if err := Install("/usr/local/bin/agenterm", path); err != nil {
+	if err := InstallHook("/usr/local/bin/agenterm", path, ClaudeHookConfig); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -178,7 +178,7 @@ func TestInstall_CleansUpPreToolUse_RemovesEmptyKey(t *testing.T) {
 		},
 	})
 
-	if err := Install("/usr/local/bin/agenterm", path); err != nil {
+	if err := InstallHook("/usr/local/bin/agenterm", path, ClaudeHookConfig); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -193,12 +193,11 @@ func TestInstall_CleansUpPreToolUse_RemovesEmptyKey(t *testing.T) {
 func TestUninstall_Basic(t *testing.T) {
 	path := tempSettingsPath(t)
 
-	// Install first.
-	if err := Install("/usr/local/bin/agenterm", path); err != nil {
+	if err := InstallHook("/usr/local/bin/agenterm", path, ClaudeHookConfig); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := Uninstall(path); err != nil {
+	if err := UninstallHook(path, ClaudeHookConfig); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -212,7 +211,7 @@ func TestUninstall_NotInstalled(t *testing.T) {
 	path := tempSettingsPath(t)
 	writeJSON(t, path, map[string]interface{}{})
 
-	err := Uninstall(path)
+	err := UninstallHook(path, ClaudeHookConfig)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -242,7 +241,7 @@ func TestUninstall_PreservesOtherHooks(t *testing.T) {
 		},
 	})
 
-	if err := Uninstall(path); err != nil {
+	if err := UninstallHook(path, ClaudeHookConfig); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -277,7 +276,7 @@ func TestUninstall_BothEventTypes(t *testing.T) {
 		},
 	})
 
-	if err := Uninstall(path); err != nil {
+	if err := UninstallHook(path, ClaudeHookConfig); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -290,8 +289,7 @@ func TestUninstall_BothEventTypes(t *testing.T) {
 func TestInstall_NoFileExists(t *testing.T) {
 	path := tempSettingsPath(t)
 
-	// File doesn't exist yet — should create it.
-	if err := Install("/usr/local/bin/agenterm", path); err != nil {
+	if err := InstallHook("/usr/local/bin/agenterm", path, ClaudeHookConfig); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

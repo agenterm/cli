@@ -126,26 +126,6 @@ func UninstallHook(settingsPath string, cfg HookConfig) error {
 	return uninstallFromSettings(settingsPath, eventNames...)
 }
 
-// Install adds the agenterm gate hook to Claude Code settings.
-func Install(binaryPath, settingsPath string) error {
-	return InstallHook(binaryPath, settingsPath, ClaudeHookConfig)
-}
-
-// Uninstall removes all agenterm gate hooks from Claude Code settings.
-func Uninstall(settingsPath string) error {
-	return UninstallHook(settingsPath, ClaudeHookConfig)
-}
-
-// InstallGemini adds the agenterm gate hook to Gemini CLI settings.
-func InstallGemini(binaryPath, settingsPath string) error {
-	return InstallHook(binaryPath, settingsPath, GeminiHookConfig)
-}
-
-// UninstallGemini removes all agenterm gate hooks from Gemini CLI settings.
-func UninstallGemini(settingsPath string) error {
-	return UninstallHook(settingsPath, GeminiHookConfig)
-}
-
 // buildEntry creates a hook entry from the given configuration.
 func buildEntry(binaryPath string, cfg HookConfig) map[string]interface{} {
 	hookEntry := map[string]interface{}{

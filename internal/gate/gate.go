@@ -7,6 +7,11 @@ import (
 	"github.com/agenterm/cli/internal/relay"
 )
 
+// expiresInBuffer is extra seconds added to server-side proposal expiry
+// so it outlives the client-side wait, avoiding a race where the CLI times out
+// but the proposal is still pending on the server.
+const expiresInBuffer = 15
+
 // GateResult holds the outcome of a gate check.
 type GateResult struct {
 	NeedsApproval bool   `json:"needs_approval"`
@@ -28,14 +33,9 @@ func RunGate(svc ProposalService, input string, rules []Rule, timeout time.Durat
 		return &GateResult{NeedsApproval: false, Decision: "allow"}, nil
 	}
 
-	proposal, err := svc.CreateProposal("approval", rule.Description, input, relay.WithExpiresIn(int(timeout.Seconds())))
+	proposal, err := submitAndWait(svc, rule.Description, input, timeout)
 	if err != nil {
-		return nil, fmt.Errorf("creating approval proposal: %w", err)
-	}
-
-	proposal, err = svc.WaitForProposal(proposal.ID, timeout)
-	if err != nil {
-		return nil, fmt.Errorf("waiting for approval: %w", err)
+		return nil, err
 	}
 
 	return &GateResult{
@@ -48,20 +48,28 @@ func RunGate(svc ProposalService, input string, rules []Rule, timeout time.Durat
 // RunPermissionGate creates a direct approval proposal (no rule matching) and waits for a response.
 // Used for events like PermissionRequest where the agent has already determined approval is needed.
 func RunPermissionGate(svc ProposalService, title, body string, timeout time.Duration) (*GateResult, error) {
-	proposal, err := svc.CreateProposal("approval", title, body, relay.WithExpiresIn(int(timeout.Seconds())))
+	proposal, err := submitAndWait(svc, title, body, timeout)
 	if err != nil {
-		return nil, fmt.Errorf("creating approval proposal: %w", err)
-	}
-
-	proposal, err = svc.WaitForProposal(proposal.ID, timeout)
-	if err != nil {
-		return nil, fmt.Errorf("waiting for approval: %w", err)
+		return nil, err
 	}
 
 	return &GateResult{
 		NeedsApproval: true,
 		Decision:      normalizeStatus(proposal.Status),
 	}, nil
+}
+
+// submitAndWait creates an approval proposal and waits for a terminal response.
+func submitAndWait(svc ProposalService, title, body string, timeout time.Duration) (*relay.Proposal, error) {
+	proposal, err := svc.CreateProposal("approval", title, body, relay.WithExpiresIn(int(timeout.Seconds())+expiresInBuffer))
+	if err != nil {
+		return nil, fmt.Errorf("creating approval proposal: %w", err)
+	}
+	proposal, err = svc.WaitForProposal(proposal.ID, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for approval: %w", err)
+	}
+	return proposal, nil
 }
 
 func normalizeStatus(status string) string {

@@ -11,15 +11,14 @@ type HookInput struct {
 	ToolUseID     string                 `json:"tool_use_id"`
 }
 
-// ParseHookInput attempts to parse raw bytes as a hook input from a supported agent.
-// Returns nil if the input is not valid hook JSON or not a supported event.
-// Supported events: PreToolUse, PermissionRequest, BeforeTool.
+// ParseHookInput attempts to parse raw bytes as a hook input from an agent.
+// Returns nil if the input is not valid hook JSON or lacks a hook_event_name.
 func ParseHookInput(data []byte) *HookInput {
 	var h HookInput
 	if err := json.Unmarshal(data, &h); err != nil {
 		return nil
 	}
-	if h.HookEventName != "PreToolUse" && h.HookEventName != "PermissionRequest" && h.HookEventName != "BeforeTool" {
+	if h.HookEventName == "" {
 		return nil
 	}
 	return &h

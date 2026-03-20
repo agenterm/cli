@@ -30,11 +30,22 @@ func TestParseHookInput_PermissionRequest(t *testing.T) {
 	}
 }
 
-func TestParseHookInput_NotSupported(t *testing.T) {
+func TestParseHookInput_UnknownEvent(t *testing.T) {
 	input := `{"hook_event_name":"PostToolUse","tool_name":"Bash"}`
 	h := ParseHookInput([]byte(input))
+	if h == nil {
+		t.Fatal("expected non-nil for structurally valid hook with unknown event")
+	}
+	if h.HookEventName != "PostToolUse" {
+		t.Fatalf("expected HookEventName=PostToolUse, got %q", h.HookEventName)
+	}
+}
+
+func TestParseHookInput_EmptyEvent(t *testing.T) {
+	input := `{"hook_event_name":"","tool_name":"Bash"}`
+	h := ParseHookInput([]byte(input))
 	if h != nil {
-		t.Fatal("expected nil for unsupported event")
+		t.Fatal("expected nil for empty hook_event_name")
 	}
 }
 

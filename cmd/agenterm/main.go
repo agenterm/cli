@@ -132,6 +132,11 @@ func runPropose(args []string) int {
 		return 2
 	}
 
+	// APN enforces a minimum expires_in of 60s; clamp to avoid silent mismatch.
+	if *timeout < 60 {
+		*timeout = 60
+	}
+
 	// Allow title as positional arg for convenience.
 	if *title == "" {
 		if remaining := fs.Args(); len(remaining) > 0 {
@@ -153,7 +158,7 @@ func runPropose(args []string) int {
 
 	client := relay.NewClient(cfg)
 
-	proposal, err := client.CreateProposal("approval", *title, *body, relay.WithExpiresIn(*timeout))
+	proposal, err := client.CreateProposal("approval", *title, *body, relay.WithExpiresIn(*timeout+15))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error creating proposal: %v\n", err)
 		return 2
@@ -245,34 +250,34 @@ func runHookInstall(target string) int {
 		return 1
 	}
 
-	matched := false
-	exitCode := 0
-	for _, t := range agent.Targets() {
-		if target != "all" && target != t.Name {
-			continue
-		}
-		matched = true
+	return forEachTarget(target, func(t agent.HookTarget) (string, error) {
 		if err := t.Install(binaryPath, ""); err != nil {
 			if errors.Is(err, hook.ErrAlreadyInstalled) {
-				fmt.Fprintf(os.Stderr, "[%s] hook already installed\n", t.Name)
-				continue
+				return "hook already installed", nil
 			}
-			fmt.Fprintf(os.Stderr, "[%s] error: %v\n", t.Name, err)
-			exitCode = 1
-			continue
+			return "", fmt.Errorf("error: %v", err)
 		}
 		settingsPath, _ := t.SettingsPath()
-		fmt.Fprintf(os.Stderr, "[%s] Installed %s hook in %s\n", t.Name, t.HookName, settingsPath)
-	}
-
-	if !matched {
-		fmt.Fprintf(os.Stderr, "unknown target: %s (use claude, gemini, or omit for all)\n", target)
-		return 2
-	}
-	return exitCode
+		return fmt.Sprintf("Installed %s hook in %s", t.HookName, settingsPath), nil
+	})
 }
 
 func runHookUninstall(target string) int {
+	return forEachTarget(target, func(t agent.HookTarget) (string, error) {
+		if err := t.Uninstall(""); err != nil {
+			if errors.Is(err, hook.ErrNotInstalled) {
+				return "hook not found", nil
+			}
+			return "", fmt.Errorf("error: %v", err)
+		}
+		settingsPath, _ := t.SettingsPath()
+		return fmt.Sprintf("Uninstalled hook from %s", settingsPath), nil
+	})
+}
+
+// forEachTarget iterates over agent targets matching the filter and runs fn.
+// The callback returns a success message or an error for fatal failures.
+func forEachTarget(target string, fn func(agent.HookTarget) (string, error)) int {
 	matched := false
 	exitCode := 0
 	for _, t := range agent.Targets() {
@@ -280,19 +285,16 @@ func runHookUninstall(target string) int {
 			continue
 		}
 		matched = true
-		if err := t.Uninstall(""); err != nil {
-			if errors.Is(err, hook.ErrNotInstalled) {
-				fmt.Fprintf(os.Stderr, "[%s] hook not found\n", t.Name)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "[%s] error: %v\n", t.Name, err)
+		msg, err := fn(t)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[%s] %v\n", t.Name, err)
 			exitCode = 1
 			continue
 		}
-		settingsPath, _ := t.SettingsPath()
-		fmt.Fprintf(os.Stderr, "[%s] Uninstalled hook from %s\n", t.Name, settingsPath)
+		if msg != "" {
+			fmt.Fprintf(os.Stderr, "[%s] %s\n", t.Name, msg)
+		}
 	}
-
 	if !matched {
 		fmt.Fprintf(os.Stderr, "unknown target: %s (use claude, gemini, or omit for all)\n", target)
 		return 2
@@ -307,6 +309,11 @@ func runGate(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 2
+	}
+
+	// APN enforces a minimum expires_in of 60s; clamp to avoid silent mismatch.
+	if *timeout < 60 {
+		*timeout = 60
 	}
 
 	// If positional args provided, use legacy mode (raw text).
@@ -342,7 +349,7 @@ func runGateHook(hookInput *agent.HookInput, timeout int) int {
 	return runGateToolCheck(hookInput, timeout, agent.OutputterForEvent(hookInput.HookEventName))
 }
 
-// runGateToolCheck is the shared gate logic for rule-matched hooks (PreToolUse, BeforeTool).
+// runGateToolCheck is the gate logic for rule-matched hooks (PreToolUse, BeforeTool).
 func runGateToolCheck(hookInput *agent.HookInput, timeout int, out agent.Outputter) int {
 	input := agent.ExtractCheckInput(hookInput)
 	if input == "" {
@@ -367,27 +374,8 @@ func runGateToolCheck(hookInput *agent.HookInput, timeout int, out agent.Outputt
 
 	client := relay.NewClient(cfg)
 	result, err := gate.RunGate(client, input, rules, time.Duration(timeout)*time.Second)
-	if errors.Is(err, relay.ErrGateDisabled) {
-		fmt.Fprintf(os.Stderr, "gate: takeover not enabled, falling back to local prompt\n")
-		if askLocallyInTerminal(input) {
-			outputJSON(out.Allow("approved locally via AgenTerm"))
-		} else {
-			outputJSON(out.Deny("denied locally via AgenTerm"))
-		}
-		return 0
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "gate: approval error: %v\n", err)
-		return 2
-	}
-
-	switch result.Decision {
-	case "approved", "allow":
-		outputJSON(out.Allow("approved via AgenTerm"))
-	default:
-		outputJSON(out.Deny(fmt.Sprintf("denied via AgenTerm: %s", rule.Description)))
-	}
-	return 0
+	denyDetail := fmt.Sprintf("denied via AgenTerm: %s", rule.Description)
+	return executeGateCheck(result, err, out, input, denyDetail)
 }
 
 // runGatePermissionRequest handles PermissionRequest hooks.
@@ -399,7 +387,6 @@ func runGatePermissionRequest(hookInput *agent.HookInput, timeout int) int {
 		return 2
 	}
 
-	// Build a meaningful title and body for the proposal.
 	title := hookInput.ToolName
 	if title == "" {
 		title = "Permission Request"
@@ -416,13 +403,26 @@ func runGatePermissionRequest(hookInput *agent.HookInput, timeout int) int {
 	out := agent.ClaudePermissionOutputter{}
 
 	result, err := gate.RunPermissionGate(client, title, body, time.Duration(timeout)*time.Second)
+	fallbackPrompt := fmt.Sprintf("Tool: %s\nInput: %s", title, body)
+	return executeGateCheck(result, err, out, fallbackPrompt, "denied via AgenTerm")
+}
+
+// executeGateCheck handles the common result/error flow shared by all hook gate checks.
+// fallbackPrompt is shown to the user when falling back to local terminal approval.
+// denyDetail is the deny reason included in the output on denial.
+func executeGateCheck(result *gate.GateResult, err error, out agent.Outputter, fallbackPrompt, denyDetail string) int {
 	if errors.Is(err, relay.ErrGateDisabled) {
 		fmt.Fprintf(os.Stderr, "gate: takeover not enabled, falling back to local prompt\n")
-		if askLocallyInTerminal(fmt.Sprintf("Tool: %s\nInput: %s", title, body)) {
+		if askLocallyInTerminal(fallbackPrompt) {
 			outputJSON(out.Allow("approved locally via AgenTerm"))
 		} else {
 			outputJSON(out.Deny("denied locally via AgenTerm"))
 		}
+		return 0
+	}
+	if errors.Is(err, relay.ErrRateLimited) {
+		fmt.Fprintf(os.Stderr, "gate: rate limited, denying for safety\n")
+		outputJSON(out.Deny("rate limited by AgenTerm relay"))
 		return 0
 	}
 	if err != nil {
@@ -434,7 +434,7 @@ func runGatePermissionRequest(hookInput *agent.HookInput, timeout int) int {
 	case "approved", "allow":
 		outputJSON(out.Allow("approved via AgenTerm"))
 	default:
-		outputJSON(out.Deny("denied via AgenTerm"))
+		outputJSON(out.Deny(denyDetail))
 	}
 	return 0
 }
@@ -465,6 +465,10 @@ func runGateLegacy(input string, timeout int) int {
 		} else {
 			return 1
 		}
+	}
+	if errors.Is(err, relay.ErrRateLimited) {
+		fmt.Fprintf(os.Stderr, "rate limited by relay server, denying for safety\n")
+		return 1
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
