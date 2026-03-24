@@ -134,6 +134,16 @@ func executeGateCheck(result *gate.GateResult, err error, out agent.Outputter, f
 		}
 		return 0
 	}
+	if errors.Is(err, relay.ErrPushKeyExpired) {
+		fmt.Fprintf(os.Stderr, "gate: push key expired or invalid — copy a fresh key from the AgenTerm app\n")
+		fmt.Fprintf(os.Stderr, "gate: falling back to local prompt\n")
+		if askLocallyInTerminal(fallbackPrompt) {
+			outputJSON(out.Allow("approved locally via AgenTerm (push key expired)"))
+		} else {
+			outputJSON(out.Deny("denied locally via AgenTerm (push key expired)"))
+		}
+		return 0
+	}
 	if errors.Is(err, relay.ErrRateLimited) {
 		fmt.Fprintf(os.Stderr, "gate: rate limited, denying for safety\n")
 		outputJSON(out.Deny("rate limited by AgenTerm relay"))

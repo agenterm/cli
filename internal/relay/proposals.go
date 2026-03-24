@@ -16,6 +16,9 @@ var ErrGateDisabled = errors.New("gate disabled: takeover not enabled")
 // ErrRateLimited is returned when the relay server rate-limits the request.
 var ErrRateLimited = errors.New("rate limited by relay server")
 
+// ErrPushKeyExpired is returned when the push key is rejected (HTTP 401).
+var ErrPushKeyExpired = errors.New("push key expired or invalid — copy a fresh key from the AgenTerm app (Settings > Account > Account Details)")
+
 // Proposal represents a proposal in the relay system.
 type Proposal struct {
 	ID          string  `json:"id"`
@@ -92,6 +95,9 @@ func (c *Client) CreateProposal(pType, title, body string, opts ...CreateOption)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, ErrPushKeyExpired
+	}
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return nil, ErrRateLimited
 	}

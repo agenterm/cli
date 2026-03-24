@@ -2,6 +2,7 @@ package relay
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,8 +46,8 @@ func TestCreateProposal_401(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Fatalf("error = %q, want substring '401'", err.Error())
+	if !errors.Is(err, ErrPushKeyExpired) {
+		t.Fatalf("error = %q, want ErrPushKeyExpired", err.Error())
 	}
 }
 

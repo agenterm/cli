@@ -22,6 +22,8 @@ func main() {
 		os.Exit(0)
 	case "init":
 		os.Exit(runInit(os.Args[2:]))
+	case "setup":
+		os.Exit(runSetup(os.Args[2:]))
 	case "propose":
 		os.Exit(runPropose(os.Args[2:]))
 	case "proposal":
@@ -40,6 +42,7 @@ func main() {
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage: agenterm <command> [args]")
 	fmt.Fprintln(os.Stderr, "Commands:")
+	fmt.Fprintln(os.Stderr, "  setup     Auto-detect agents, configure relay, install hooks (recommended)")
 	fmt.Fprintln(os.Stderr, "  init      [--push-key KEY] [--relay-url URL]")
 	fmt.Fprintln(os.Stderr, "  version   Print version and exit")
 	fmt.Fprintln(os.Stderr, "  propose   --title \"...\" --body \"...\" [--wait] [--timeout 60]")
