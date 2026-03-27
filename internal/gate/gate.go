@@ -41,7 +41,7 @@ func RunGate(svc ProposalService, input string, rules []Rule, timeout time.Durat
 	return &GateResult{
 		NeedsApproval: true,
 		Rule:          rule.Description,
-		Decision:      normalizeStatus(proposal.Status),
+		Decision:      NormalizeStatus(proposal.Status),
 	}, nil
 }
 
@@ -55,7 +55,7 @@ func RunPermissionGate(svc ProposalService, title, body string, timeout time.Dur
 
 	return &GateResult{
 		NeedsApproval: true,
-		Decision:      normalizeStatus(proposal.Status),
+		Decision:      NormalizeStatus(proposal.Status),
 	}, nil
 }
 
@@ -72,7 +72,8 @@ func submitAndWait(svc ProposalService, title, body string, timeout time.Duratio
 	return proposal, nil
 }
 
-func normalizeStatus(status string) string {
+// NormalizeStatus maps proposal statuses to gate decisions.
+func NormalizeStatus(status string) string {
 	switch status {
 	case "remembered":
 		return "approved"

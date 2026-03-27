@@ -126,6 +126,71 @@ func UninstallHook(settingsPath string, cfg HookConfig) error {
 	return uninstallFromSettings(settingsPath, eventNames...)
 }
 
+// InstallMultipleHooks adds the agenterm gate hook for each event name listed.
+// It reuses cfg for timeout/defaults but writes a separate entry per event.
+func InstallMultipleHooks(binaryPath, settingsPath string, events []string, cfg HookConfig) (installed int, err error) {
+	if settingsPath == "" {
+		settingsPath, err = cfg.DefaultSettingsPath()
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	settings, err := readSettings(settingsPath)
+	if err != nil {
+		return 0, err
+	}
+
+	hooks := getHooksMap(settings)
+
+	for _, event := range events {
+		entries := getHookEntries(hooks, event)
+		if containsMarker(entries) {
+			continue
+		}
+		perEvent := cfg
+		perEvent.EventName = event
+		entry := buildEntry(binaryPath, perEvent)
+		entries = append(entries, entry)
+		hooks[event] = entries
+		installed++
+	}
+
+	// Clean up legacy events.
+	for _, legacy := range cfg.LegacyEvents {
+		legacyEntries := getHookEntries(hooks, legacy)
+		if len(legacyEntries) > 0 {
+			filtered, removed := removeMarkerEntries(legacyEntries)
+			if removed > 0 {
+				if len(filtered) == 0 {
+					delete(hooks, legacy)
+				} else {
+					hooks[legacy] = filtered
+				}
+			}
+		}
+	}
+
+	if installed == 0 {
+		return 0, ErrAlreadyInstalled
+	}
+
+	return installed, writeSettings(settingsPath, settings)
+}
+
+// UninstallAllHooks removes agenterm gate hooks for all listed event names.
+func UninstallAllHooks(settingsPath string, events []string, cfg HookConfig) error {
+	if settingsPath == "" {
+		var err error
+		settingsPath, err = cfg.DefaultSettingsPath()
+		if err != nil {
+			return err
+		}
+	}
+	allEvents := append(append([]string{}, events...), cfg.LegacyEvents...)
+	return uninstallFromSettings(settingsPath, allEvents...)
+}
+
 // buildEntry creates a hook entry from the given configuration.
 func buildEntry(binaryPath string, cfg HookConfig) map[string]interface{} {
 	hookEntry := map[string]interface{}{

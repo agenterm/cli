@@ -55,84 +55,38 @@ func runGate(args []string) int {
 	return runGateLegacy(input, *timeout)
 }
 
-// runGateHook dispatches hook input to the appropriate handler based on event type.
+// runGateHook dispatches any hook event via the unified /hooks endpoint.
 func runGateHook(hookInput *agent.HookInput, timeout int) int {
-	if hookInput.HookEventName == "PermissionRequest" {
-		return runGatePermissionRequest(hookInput, timeout)
-	}
-	return runGateToolCheck(hookInput, timeout, agent.OutputterForEvent(hookInput.HookEventName))
-}
-
-// runGateToolCheck is the gate logic for rule-matched hooks (PreToolUse, BeforeTool).
-func runGateToolCheck(hookInput *agent.HookInput, timeout int, out agent.Outputter) int {
-	input := agent.ExtractCheckInput(hookInput)
-	if input == "" {
-		outputJSON(out.Allow("no input to check"))
-		return 0
-	}
-
-	rules := gate.DefaultRules()
-	matched, rule := gate.MatchesAny(input, rules)
-	if !matched {
-		outputJSON(out.Allow("no dangerous pattern matched"))
-		return 0
-	}
-
-	fmt.Fprintf(os.Stderr, "matched rule: %s\n", rule.Description)
-
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "gate: config not found, blocking dangerous operation: %s\n", rule.Description)
-		return 2
-	}
-
-	client := relay.NewClient(cfg)
-	result, err := gate.RunGate(client, input, rules, time.Duration(timeout)*time.Second)
-	denyDetail := fmt.Sprintf("denied via AgenTerm: %s", rule.Description)
-	return executeGateCheck(result, err, out, input, denyDetail)
-}
-
-// runGatePermissionRequest handles PermissionRequest hooks.
-// Claude Code has already determined this action needs permission — no rule matching needed.
-func runGatePermissionRequest(hookInput *agent.HookInput, timeout int) int {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "gate: config not found, blocking permission request\n")
-		return 2
-	}
-
-	title := hookInput.ToolName
-	if title == "" {
-		title = "Permission Request"
-	}
-	body := ""
-	if len(hookInput.ToolInput) > 0 {
-		data, err := json.Marshal(hookInput.ToolInput)
-		if err == nil {
-			body = string(data)
+	// For observability events without config, just exit silently.
+	if agent.IsObservabilityEvent(hookInput.HookEventName) {
+		cfg, err := config.Load()
+		if err != nil {
+			return 0
 		}
+		client := relay.NewClient(cfg)
+		_, _ = client.ForwardHook(hookInput.RawJSON)
+		return 0
+	}
+
+	// Decision event: forward to APN and wait for response.
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gate: config not found, blocking %s\n", hookInput.HookEventName)
+		return 2
 	}
 
 	client := relay.NewClient(cfg)
+	hookResp, err := client.ForwardHook(hookInput.RawJSON)
+
 	out := agent.OutputterForEvent(hookInput.HookEventName)
+	fallbackPrompt := fmt.Sprintf("[%s] %s", hookInput.HookEventName, hookInput.ToolName)
 
-	result, err := gate.RunPermissionGate(client, title, body, time.Duration(timeout)*time.Second)
-	fallbackPrompt := fmt.Sprintf("Tool: %s\nInput: %s", title, body)
-	return executeGateCheck(result, err, out, fallbackPrompt, "denied via AgenTerm")
-}
-
-// executeGateCheck handles the common result/error flow shared by all hook gate checks.
-// fallbackPrompt is shown to the user when falling back to local terminal approval.
-// denyDetail is the deny reason included in the output on denial.
-func executeGateCheck(result *gate.GateResult, err error, out agent.Outputter, fallbackPrompt, denyDetail string) int {
 	if errors.Is(err, relay.ErrGateDisabled) {
 		fmt.Fprintf(os.Stderr, "gate: takeover not enabled, falling back to local prompt\n")
 		if askLocallyInTerminal(fallbackPrompt) {
-			outputJSON(out.Allow("approved locally via AgenTerm"))
-		} else {
-			outputJSON(out.Deny("denied locally via AgenTerm"))
+			return outputDecision(out.Allow("approved locally via AgenTerm"))
 		}
-		return 0
+		return outputDecision(out.Deny("denied locally via AgenTerm"))
 	}
 	if errors.Is(err, relay.ErrPushKeyExpired) {
 		fmt.Fprintf(os.Stderr, "gate: push key expired or invalid — copy a fresh key from the AgenTerm app\n")
@@ -146,20 +100,45 @@ func executeGateCheck(result *gate.GateResult, err error, out agent.Outputter, f
 	}
 	if errors.Is(err, relay.ErrRateLimited) {
 		fmt.Fprintf(os.Stderr, "gate: rate limited, denying for safety\n")
-		outputJSON(out.Deny("rate limited by AgenTerm relay"))
-		return 0
+		return outputDecision(out.Deny("rate limited by AgenTerm relay"))
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gate: error: %v\n", err)
 		return 2
 	}
 
-	switch result.Decision {
-	case "approved", "allow":
-		outputJSON(out.Allow("approved via AgenTerm"))
-	default:
-		outputJSON(out.Deny(denyDetail))
+	if hookResp.Mode == "observability" {
+		return 0
 	}
+
+	// Decision mode: long-poll for proposal resolution.
+	proposal, err := client.WaitForProposal(hookResp.Proposal.ID, time.Duration(timeout)*time.Second)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gate: error waiting: %v\n", err)
+		return 2
+	}
+
+	switch gate.NormalizeStatus(proposal.Status) {
+	case "approved":
+		return outputDecision(out.Allow("approved via AgenTerm"))
+	default:
+		return outputDecision(out.Deny("denied via AgenTerm"))
+	}
+}
+
+// outputDecision writes the outputter result to stdout and returns the appropriate exit code.
+func outputDecision(result interface{}) int {
+	if result == nil {
+		return 0
+	}
+
+	// ExitCodeDeny means deny via exit code 2 + stderr.
+	if deny, ok := result.(*agent.ExitCodeDeny); ok {
+		fmt.Fprintln(os.Stderr, deny.Reason)
+		return 2
+	}
+
+	outputJSON(result)
 	return 0
 }
 

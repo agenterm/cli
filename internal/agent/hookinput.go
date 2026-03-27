@@ -9,6 +9,7 @@ type HookInput struct {
 	ToolName      string                 `json:"tool_name"`
 	ToolInput     map[string]interface{} `json:"tool_input"`
 	ToolUseID     string                 `json:"tool_use_id"`
+	RawJSON       json.RawMessage        `json:"-"` // full stdin payload for forwarding
 }
 
 // ParseHookInput attempts to parse raw bytes as a hook input from an agent.
@@ -21,6 +22,7 @@ func ParseHookInput(data []byte) *HookInput {
 	if h.HookEventName == "" {
 		return nil
 	}
+	h.RawJSON = json.RawMessage(data)
 	return &h
 }
 
